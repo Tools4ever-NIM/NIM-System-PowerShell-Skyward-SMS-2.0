@@ -114,6 +114,20 @@ function Idm-SystemInfo {
                 label = 'Enable KA'
                 value = $true
             }
+			 @{
+                name = 'nr_of_sessions'
+                type = 'textbox'
+                label = 'Max. number of simultaneous sessions'
+                description = ''
+                value = 5
+            }
+            @{
+                name = 'sessions_idle_timeout'
+                type = 'textbox'
+                label = 'Session cleanup idle time (minutes)'
+                description = ''
+                value = 10
+            }
         )
     }
 
@@ -140,22 +154,77 @@ function Idm-OnUnload {
     Close-ProgressDBConnection
 }
 
-
 #
 # CRUD functions
 #
 
 $ColumnsInfoCache = @{}
 
+$SqlInfoCache = @{}
 
-function Compose-SqlCommand-SelectColumnsInfo {
+function Fill-SqlInfoCache {
     param (
-        [string] $Table
+        [switch] $Force
     )
 
-    "SELECT * FROM SYSPROGRESS.SYSCOLUMNS WHERE TBL = '$($Table)' "
-}
+    if (!$Force -and $Global:SqlInfoCache.Ts -and ((Get-Date) - $Global:SqlInfoCache.Ts).TotalMilliseconds -le [Int32]3600000) {
+        return
+    }
 
+    # Refresh cache
+    $sql_command = "
+        SELECT SYSPROGRESS.SYSCOLUMNS.TBL `"full_object_name`",
+				'Table' `"object_type`",
+				SYSPROGRESS.SYSCOLUMNS.COL `"column_name`",
+				CASE WHEN LENGTH(PK.COLNAME) > 0 THEN 1 ELSE 0 END `"is_primary_key`",
+				0 `"is_identity`",
+				0 `"is_computed`",
+				CASE WHEN SYSPROGRESS.SYSCOLUMNS.NULLFLAG = 'Y' THEN 1 ELSE 0 END `"is_nullable`"
+		 FROM SYSPROGRESS.SYSCOLUMNS 
+		 LEFT JOIN (
+			SELECT SYSPROGRESS.`"SYSINDEXES`".COLNAME,SYSPROGRESS.SYSTABLES_FULL.TBL
+			from pub.`"_index`"
+			JOIN SYSPROGRESS.SYSTABLES_FULL ON SYSPROGRESS.SYSTABLES_FULL.`"PRIME_INDEX`" = pub.`"_index`".ROWID
+			JOIN SYSPROGRESS.`"SYSINDEXES`" ON SYSPROGRESS.`"SYSINDEXES`".ID = pub.`"_index`".`"_idx-num`"
+			AND SYSPROGRESS.SYSTABLES_FULL.TBLTYPE = 'T'
+		 ) PK ON PK.COLNAME = SYSPROGRESS.SYSCOLUMNS.COL AND PK.TBL = SYSPROGRESS.SYSCOLUMNS.TBL
+        ORDER BY
+            SYSPROGRESS.SYSCOLUMNS.TBL, SYSPROGRESS.SYSCOLUMNS.COL
+    "
+
+    $objects = New-Object System.Collections.ArrayList
+    $object = @{}
+
+    # Process in one pass
+    Invoke-ProgressDBCommand $sql_command | ForEach-Object {
+        if ($_.full_object_name -ne $object.full_name) {
+            if ($object.full_name -ne $null) {
+                $objects.Add($object) | Out-Null
+            }
+
+            $object = @{
+                full_name = $_.full_object_name
+                type      = $_.object_type
+                columns   = New-Object System.Collections.ArrayList
+            }
+        }
+
+        $object.columns.Add(@{
+            name           = $_.column_name
+            is_primary_key = $_.is_primary_key
+            is_identity    = $_.is_identity
+            is_computed    = $_.is_computed
+            is_nullable    = $_.is_nullable
+        }) | Out-Null
+    }
+
+    if ($object.full_name -ne $null) {
+        $objects.Add($object) | Out-Null
+    }
+
+    $Global:SqlInfoCache.Objects = $objects
+    $Global:SqlInfoCache.Ts = Get-Date
+}
 
 function Idm-Dispatcher {
     param (
@@ -177,64 +246,56 @@ function Idm-Dispatcher {
             #
             # Get all tables and views in database
             #
-
-            Open-ProgressDBConnection $SystemParams
-
-            $tables = Invoke-ProgressDBCommand "
-                SELECT TBL 'Name', 'Table' `"Type`"  
-                FROM sysprogress.SYSTABLES_FULL 
-                WHERE TBLTYPE = 'T'
-                ORDER BY TBL
-            "
+			Open-ProgressDBConnection $SystemParams
+            Fill-SqlInfoCache
 
             #
             # Output list of supported operations per table/view (named Class)
             #
 
-            @(
-                foreach ($t in $tables) {
+             @(
+                foreach ($object in $Global:SqlInfoCache.Objects) {
+                    $primary_keys = $object.columns | Where-Object { $_.is_primary_key } | ForEach-Object { $_.name }
 
-                    $primary_key = '' #ProgressDB you have you query primary index to find the primary key. TBD.
-                    if ($t.Type -ne 'Table') {
+                    if ($object.type -ne 'Table') {
                         # Non-tables only support 'Read'
                         [ordered]@{
-                            Class = $t.Name
+                            Class = $object.full_name
                             Operation = 'Read'
-                            'Source type' = $t.Type
-                            'Primary key' = $primary_key
+                            'Source type' = $object.type
+                            'Primary key' = $primary_keys -join ', '
                             'Supported operations' = 'R'
                         }
                     }
                     else {
                         [ordered]@{
-                            Class = $t.Name
+                            Class = $object.full_name
                             Operation = 'Create'
                         }
 
                         [ordered]@{
-                            Class = $t.Name
+                            Class = $object.full_name
                             Operation = 'Read'
-                            'Source type' = $t.Type
-                            'Primary key' = $primary_key
-                            'Supported operations' = "CR$(if ($primary_key) { 'UD' } else { '' })"
+                            'Source type' = $object.type
+                            'Primary key' = $primary_keys -join ', '
+                            'Supported operations' = "CR$(if ($primary_keys) { 'UD' } else { '' })"
                         }
 
-                        if ($primary_key) {
-                            # Only supported if primary key is present
+                        if ($primary_keys) {
+                            # Only supported if primary keys are present
                             [ordered]@{
-                                Class = $t.Name
+                                Class = $object.full_name
                                 Operation = 'Update'
                             }
 
                             [ordered]@{
-                                Class = $t.Name
+                                Class = $object.full_name
                                 Operation = 'Delete'
                             }
                         }
                     }
                 }
             )
-
         }
         else {
             # Purposely no-operation.
@@ -247,10 +308,10 @@ function Idm-Dispatcher {
             #
             # Get meta data
             #
-
             Open-ProgressDBConnection $SystemParams
+            Fill-SqlInfoCache
 
-            $columns = Invoke-ProgressDBCommand (Compose-SqlCommand-SelectColumnsInfo $Class)
+            $columns = ($Global:SqlInfoCache.Objects | Where-Object { $_.full_name -eq $Class }).columns
 
             switch ($Operation) {
                 'Create' {
@@ -259,9 +320,8 @@ function Idm-Dispatcher {
                         parameters = @(
                             $columns | ForEach-Object {
                                 @{
-                                    name = $_.COL;
-                                    #allowance = if ($_.is_identity -or $_.is_computed) { 'prohibited' } elseif (! $_.is_nullable) { 'mandatory' } else { 'optional' }
-                                    allowance = 'optional'
+                                    name = $_.name;
+                                    allowance = if ($_.is_identity -or $_.is_computed) { 'prohibited' } elseif (! $_.is_nullable) { 'mandatory' } else { 'optional' }
                                 }
                             }
                         )
@@ -271,6 +331,13 @@ function Idm-Dispatcher {
 
                 'Read' {
                     @(
+                        @{
+                            name = 'select_distinct'
+                            type = 'checkbox'
+                            label = 'Distinct Rows'
+                            description = 'Apply Distinct to select'
+                            value = $false
+                        }
                         @{
                             name = 'where_clause'
                             type = 'textbox'
@@ -286,12 +353,12 @@ function Idm-Dispatcher {
                             table = @{
                                 rows = @($columns | ForEach-Object {
                                     @{
-                                        name = $_.COL
+                                        name = $_.name
                                         config = @(
-                                            #if ($_.is_primary_key) { 'Primary key' }
-                                            #if ($_.is_identity)    { 'Auto identity' }
-                                            #if ($_.is_computed)    { 'Computed' }
-                                            #if ($_.is_nullable)    { 'Nullable' }
+                                            if ($_.is_primary_key) { 'Primary key' }
+                                            if ($_.is_identity)    { 'Generated' }
+                                            if ($_.is_computed)    { 'Computed' }
+                                            if ($_.is_nullable)    { 'Nullable' }
                                         ) -join ' | '
                                     }
                                 })
@@ -312,7 +379,7 @@ function Idm-Dispatcher {
                                     )
                                 }
                             }
-                            value = @($columns | ForEach-Object { $_.column_name })
+                            value = @($columns | ForEach-Object { $_.name })
                         }
                     )
                     break
@@ -324,10 +391,13 @@ function Idm-Dispatcher {
                         parameters = @(
                             $columns | ForEach-Object {
                                 @{
-                                    name = $_.column_name;
-                                    #allowance = if ($_.is_primary_key) { 'mandatory' } else { 'optional' }
-                                    allowance = 'optional'
+                                    name = $_.name;
+                                    allowance = if ($_.is_primary_key) { 'mandatory' } else { 'optional' }
                                 }
+                            }
+                            @{
+                                name = '*'
+                                allowance = 'prohibited'
                             }
                         )
                     }
@@ -341,7 +411,7 @@ function Idm-Dispatcher {
                             $columns | ForEach-Object {
                                 if ($_.is_primary_key) {
                                     @{
-                                        name = $_.column_name
+                                        name = $_.name
                                         allowance = 'mandatory'
                                     }
                                 }
@@ -361,17 +431,16 @@ function Idm-Dispatcher {
             #
             # Execute function
             #
-
             Open-ProgressDBConnection $SystemParams
 
             if (! $Global:ColumnsInfoCache[$Class]) {
-                $columns = Invoke-ProgressDBCommand (Compose-SqlCommand-SelectColumnsInfo $Class)
+                Fill-SqlInfoCache
+
+                $columns = ($Global:SqlInfoCache.Objects | Where-Object { $_.full_name -eq $Class }).columns
 
                 $Global:ColumnsInfoCache[$Class] = @{
-                    #primary_key  = @($columns | Where-Object { $_.is_primary_key } | ForEach-Object { $_.column_name })[0]
-                    #identity_col = @($columns | Where-Object { $_.is_identity    } | ForEach-Object { $_.column_name })[0]
-                    primary_key = ''
-                    identity_col = ''
+                    primary_keys = @($columns | Where-Object { $_.is_primary_key } | ForEach-Object { $_.name })
+                    identity_col = @($columns | Where-Object { $_.is_identity    } | ForEach-Object { $_.name })[0]
                 }
             }
 
@@ -420,7 +489,7 @@ function Idm-Dispatcher {
 
             if ($command) {
                 LogIO info ($command -split ' ')[0] -In -Command $command
-
+				
                 if ($Operation -eq 'Read') {
                     # Streamed output
                     Invoke-ProgressDBCommand $command
@@ -455,16 +524,15 @@ function Invoke-ProgressDBCommand {
         param (
             [string] $Command
         )
-        log debug $Command     
-        $sql_command  = New-Object System.Data.Odbc.OdbcCommand($Command, $Global:ProgressDBConnection)
+        
+		log debug $Command 
+		$sql_command  = New-Object System.Data.Odbc.OdbcCommand($Command, $Global:ProgressDBConnection)
         $data_adapter = New-Object System.Data.Odbc.OdbcDataAdapter($sql_command)
         $data_table   = New-Object System.Data.DataTable
         $data_adapter.Fill($data_table) | Out-Null
 
         # Output data
         $data_table.Rows | Select $data_table.Columns.ColumnName
-
-        log debug $data_table.Columns
 
         $data_table.Dispose()
         $data_adapter.Dispose()
@@ -495,7 +563,7 @@ function Open-ProgressDBConnection {
     if($connection_params.enableUWCT) { $connectionString += "UWCT=1;" }
     if($connection_params.enableKA) { $connectionString += "KA=1;" }
     LOG info $connection_string
-
+	
     $Global:enableVPN = $connection_params.enableVPN
     $Global:vpnOpenPath = $connection_params.vpnOpenPath
     $Global:vpnClosePath = $connection_params.vpnClosePath
