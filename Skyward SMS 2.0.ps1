@@ -126,7 +126,7 @@ function Idm-SystemInfo {
                 type = 'textbox'
                 label = 'Session cleanup idle time (minutes)'
                 description = ''
-                value = 10
+                value = 30
             }
         )
     }
@@ -164,33 +164,58 @@ $SqlInfoCache = @{}
 
 function Fill-SqlInfoCache {
     param (
-        [switch] $Force
+        [switch] $Force,
+		[string] $Table
     )
+	
+	if($Table.length -gt 0) {
+		$sql_command = "
+			SELECT SYSPROGRESS.SYSCOLUMNS.TBL `"full_object_name`",
+					'Table' `"object_type`",
+					SYSPROGRESS.SYSCOLUMNS.COL `"column_name`",
+					CASE WHEN LENGTH(PK.COLNAME) > 0 THEN 1 ELSE 0 END `"is_primary_key`",
+					0 `"is_identity`",
+					0 `"is_computed`",
+					CASE WHEN SYSPROGRESS.SYSCOLUMNS.NULLFLAG = 'Y' THEN 1 ELSE 0 END `"is_nullable`"
+			 FROM SYSPROGRESS.SYSCOLUMNS 
+			 LEFT JOIN (
+				SELECT SYSPROGRESS.`"SYSINDEXES`".COLNAME,SYSPROGRESS.SYSTABLES_FULL.TBL
+				from pub.`"_index`"
+				JOIN SYSPROGRESS.SYSTABLES_FULL ON SYSPROGRESS.SYSTABLES_FULL.`"PRIME_INDEX`" = pub.`"_index`".ROWID
+				JOIN SYSPROGRESS.`"SYSINDEXES`" ON SYSPROGRESS.`"SYSINDEXES`".ID = pub.`"_index`".`"_idx-num`"
+				AND SYSPROGRESS.SYSTABLES_FULL.TBLTYPE = 'T'
+			 ) PK ON PK.COLNAME = SYSPROGRESS.SYSCOLUMNS.COL AND PK.TBL = SYSPROGRESS.SYSCOLUMNS.TBL
+			 WHERE SYSPROGRESS.SYSCOLUMNS.TBL = '$($Table)'
+			ORDER BY
+				SYSPROGRESS.SYSCOLUMNS.TBL, SYSPROGRESS.SYSCOLUMNS.COL
+		"
+	} else {
+		
+		if (!$Force -and $Global:SqlInfoCache.Ts -and ((Get-Date) - $Global:SqlInfoCache.Ts).TotalMilliseconds -le [Int32]3600000) {
+			return
+		}
 
-    if (!$Force -and $Global:SqlInfoCache.Ts -and ((Get-Date) - $Global:SqlInfoCache.Ts).TotalMilliseconds -le [Int32]3600000) {
-        return
-    }
-
-    # Refresh cache
-    $sql_command = "
-        SELECT SYSPROGRESS.SYSCOLUMNS.TBL `"full_object_name`",
-				'Table' `"object_type`",
-				SYSPROGRESS.SYSCOLUMNS.COL `"column_name`",
-				CASE WHEN LENGTH(PK.COLNAME) > 0 THEN 1 ELSE 0 END `"is_primary_key`",
-				0 `"is_identity`",
-				0 `"is_computed`",
-				CASE WHEN SYSPROGRESS.SYSCOLUMNS.NULLFLAG = 'Y' THEN 1 ELSE 0 END `"is_nullable`"
-		 FROM SYSPROGRESS.SYSCOLUMNS 
-		 LEFT JOIN (
-			SELECT SYSPROGRESS.`"SYSINDEXES`".COLNAME,SYSPROGRESS.SYSTABLES_FULL.TBL
-			from pub.`"_index`"
-			JOIN SYSPROGRESS.SYSTABLES_FULL ON SYSPROGRESS.SYSTABLES_FULL.`"PRIME_INDEX`" = pub.`"_index`".ROWID
-			JOIN SYSPROGRESS.`"SYSINDEXES`" ON SYSPROGRESS.`"SYSINDEXES`".ID = pub.`"_index`".`"_idx-num`"
-			AND SYSPROGRESS.SYSTABLES_FULL.TBLTYPE = 'T'
-		 ) PK ON PK.COLNAME = SYSPROGRESS.SYSCOLUMNS.COL AND PK.TBL = SYSPROGRESS.SYSCOLUMNS.TBL
-        ORDER BY
-            SYSPROGRESS.SYSCOLUMNS.TBL, SYSPROGRESS.SYSCOLUMNS.COL
-    "
+		# Refresh cache
+		$sql_command = "
+			SELECT SYSPROGRESS.SYSCOLUMNS.TBL `"full_object_name`",
+					'Table' `"object_type`",
+					SYSPROGRESS.SYSCOLUMNS.COL `"column_name`",
+					CASE WHEN LENGTH(PK.COLNAME) > 0 THEN 1 ELSE 0 END `"is_primary_key`",
+					0 `"is_identity`",
+					0 `"is_computed`",
+					CASE WHEN SYSPROGRESS.SYSCOLUMNS.NULLFLAG = 'Y' THEN 1 ELSE 0 END `"is_nullable`"
+			 FROM SYSPROGRESS.SYSCOLUMNS 
+			 LEFT JOIN (
+				SELECT SYSPROGRESS.`"SYSINDEXES`".COLNAME,SYSPROGRESS.SYSTABLES_FULL.TBL
+				from pub.`"_index`"
+				JOIN SYSPROGRESS.SYSTABLES_FULL ON SYSPROGRESS.SYSTABLES_FULL.`"PRIME_INDEX`" = pub.`"_index`".ROWID
+				JOIN SYSPROGRESS.`"SYSINDEXES`" ON SYSPROGRESS.`"SYSINDEXES`".ID = pub.`"_index`".`"_idx-num`"
+				AND SYSPROGRESS.SYSTABLES_FULL.TBLTYPE = 'T'
+			 ) PK ON PK.COLNAME = SYSPROGRESS.SYSCOLUMNS.COL AND PK.TBL = SYSPROGRESS.SYSCOLUMNS.TBL
+			ORDER BY
+				SYSPROGRESS.SYSCOLUMNS.TBL, SYSPROGRESS.SYSCOLUMNS.COL
+		"
+	}
 
     $objects = New-Object System.Collections.ArrayList
     $object = @{}
@@ -309,7 +334,7 @@ function Idm-Dispatcher {
             # Get meta data
             #
             Open-ProgressDBConnection $SystemParams
-            Fill-SqlInfoCache
+            Fill-SqlInfoCache -Table $Class
 
             $columns = ($Global:SqlInfoCache.Objects | Where-Object { $_.full_name -eq $Class }).columns
 
@@ -434,17 +459,18 @@ function Idm-Dispatcher {
             Open-ProgressDBConnection $SystemParams
 
             if (! $Global:ColumnsInfoCache[$Class]) {
-                Fill-SqlInfoCache
+                Fill-SqlInfoCache -Table $Class
 
                 $columns = ($Global:SqlInfoCache.Objects | Where-Object { $_.full_name -eq $Class }).columns
-
+				
                 $Global:ColumnsInfoCache[$Class] = @{
                     primary_keys = @($columns | Where-Object { $_.is_primary_key } | ForEach-Object { $_.name })
                     identity_col = @($columns | Where-Object { $_.is_identity    } | ForEach-Object { $_.name })[0]
                 }
+				
             }
 
-            $primary_key  = $Global:ColumnsInfoCache[$Class].primary_key
+            $primary_key  = $Global:ColumnsInfoCache[$Class].primary_keys
             $identity_col = $Global:ColumnsInfoCache[$Class].identity_col
 
             $function_params = ConvertFrom-Json2 $FunctionParams
@@ -465,7 +491,7 @@ function Idm-Dispatcher {
                                      @($function_params.Keys | ForEach-Object { "`"$_`" = '$($function_params[$_])'" }) -join ' AND '
                                  }
 
-                    $command = "INSERT INTO $Class ($(@($function_params.Keys | ForEach-Object { '"'+$_+'"' }) -join ', ')) VALUES ($(@($function_params.Keys | ForEach-Object { "$(if ($function_params[$_] -ne $null) { "'$($function_params[$_])'" } else { 'null' })" }) -join ', ')); SELECT TOP(1) $projection FROM $Class WHERE $selection"
+                    $command = "INSERT INTO `"PUB`".`"$Class`" ($(@($function_params.Keys | ForEach-Object { '"'+$_+'"' }) -join ', ')) VALUES ($(@($function_params.Keys | ForEach-Object { "$(if ($function_params[$_] -ne $null) { "'$($function_params[$_])'" } else { 'null' })" }) -join ', '));SELECT TOP 1 $projection FROM `"PUB`".`"$Class`" WHERE $selection"
                     break
                 }
 
@@ -477,16 +503,16 @@ function Idm-Dispatcher {
                 }
 
                 'Update' {
-                    $command = "UPDATE TOP(1) $Class SET $(@($function_params.Keys | ForEach-Object { if ($_ -ne $primary_key) { "[$_] = $(if ($function_params[$_] -ne $null) { "'$($function_params[$_])'" } else { 'null' })" } }) -join ', ') WHERE [$primary_key] = '$($function_params[$primary_key])'; SELECT TOP(1) [$primary_key], $(@($function_params.Keys | ForEach-Object { if ($_ -ne $primary_key) { "[$_]" } }) -join ', ') FROM $Class WHERE [$primary_key] = '$($function_params[$primary_key])'"
-                    break
+					$command = "UPDATE `"PUB`".`"$Class`" SET $(@($function_params.Keys | ForEach-Object { if ($_ -ne $primary_key) { '"{0}" = {1}' -f $_,"$(if ($function_params[$_] -ne $null) { "'$($function_params[$_])'" } else { 'null' })" } }) -join ', ') WHERE `"$primary_key`" = '$($function_params[$primary_key])';SELECT `"$primary_key`", $(@($function_params.Keys | ForEach-Object { if ($_ -ne $primary_key) { '"{0}"' -f $_ } }) -join ', ') FROM `"PUB`".`"$Class`" WHERE `"$primary_key`" = '$($function_params[$primary_key])'"
+					break
                 }
 
                 'Delete' {
-                    $command = "DELETE TOP(1) $Class WHERE [$primary_key] = '$($function_params[$primary_key])'"
+                    $command = "DELETE TOP 1 `"PUB`".`"$Class`" WHERE [$primary_key] = '$($function_params[$primary_key])'"
                     break
                 }
             }
-
+			
             if ($command) {
                 LogIO info ($command -split ' ')[0] -In -Command $command
 				
@@ -496,10 +522,16 @@ function Idm-Dispatcher {
                 }
                 else {
                     # Log output
-                    $rv = Invoke-ProgressDBCommand $command
-                    LogIO info ($command -split ' ')[0] -Out $rv
+                    foreach($cmd in ($command -split ';')) {
+						$rv = Invoke-ProgressDBCommand ($cmd -replace ';','')
+						LogIO info ($cmd -split ' ')[0] -Out $rv
 
-                    $rv
+						if($cmd.StartsWith('UPDATE') -or $cmd.StartsWith('CREATE')) {
+							#skip result
+						} else {
+							$rv
+						}
+					}
                 }
             }
 
@@ -524,8 +556,6 @@ function Invoke-ProgressDBCommand {
         param (
             [string] $Command
         )
-        
-		log debug $Command 
 		$sql_command  = New-Object System.Data.Odbc.OdbcCommand($Command, $Global:ProgressDBConnection)
         $data_adapter = New-Object System.Data.Odbc.OdbcDataAdapter($sql_command)
         $data_table   = New-Object System.Data.DataTable
