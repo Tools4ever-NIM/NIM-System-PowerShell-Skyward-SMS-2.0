@@ -557,6 +557,7 @@ function Invoke-ProgressDBCommand {
             [string] $Command
         )
 		$sql_command  = New-Object System.Data.Odbc.OdbcCommand($Command, $Global:ProgressDBConnection)
+		$sql_command.CommandTimeout = 1800
         $data_adapter = New-Object System.Data.Odbc.OdbcDataAdapter($sql_command)
         $data_table   = New-Object System.Data.DataTable
         $data_adapter.Fill($data_table) | Out-Null
@@ -617,6 +618,7 @@ function Open-ProgressDBConnection {
         
         $connection = (new-object System.Data.Odbc.OdbcConnection);
         $connection.connectionstring = $connection_string
+		$connection.ConnectionTimeout = 3600
         $connection.open();
 
         $Global:ProgressDBConnection       = $connection
