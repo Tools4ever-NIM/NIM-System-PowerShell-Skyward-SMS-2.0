@@ -1,38 +1,16 @@
-# NIM-Conn-System-PowerShell-Skyward-SMS2.0
+# Skyward SMS 2.0
 
-<p align="center">
-  <img src="Assets/Logo.jpg">
-</p>
-NIM Connector for Skyward SMS 2.0
+<img src="https://github.com/Tools4ever-NIM/NIM-System-PowerShell-Skyward-SMS-2.0/assets/24281600/4ca19abe-5fd1-464d-b0c8-f7919318b9e7" width="256px" />
 
-<!-- TABLE OF CONTENTS -->
-## Table of Contents
-* [Requirements](#Requirements)
-* [Sample VPN Scripts](#sample-vpn-scripts)
 
-## Requirements
-- Progress OpenEdge Driver 11.7+ (ODBC)
-  https://support.skyward.com/DeptDocs/Corporate/IT%20Services/Public%20Website/Technical%20Information/PaCInstallDocs/Skyward%20ODBC%20Launch%20Kit.pdf
 
-## Sample VPN Scripts
-### Open VPN
-```
-cd C:\Tools4ever\Scripts
-taskkill /S localhost /im vpncli.exe /f /t
-taskkill /S localhost /im vpnui.exe /f /t
-"c:\program files (x86)\Cisco\Cisco AnyConnect Secure Mobility Client\vpncli.exe" -s < connect.txt
-```
-### Close VPN
-```
-cd C:\Tools4ever\Scripts
-"c:\program files (x86)\Cisco\Cisco AnyConnect Secure Mobility Client\vpncli.exe" disconnect
-```
-### VPN Client Config
-```
-connect vpn-1.iscorp.com
-idofgroup
-thisismusername
-thisismypassword
-y
-quit
-```
+## Data Tables
+- This is open ended. You can select any table from the database
+
+
+## Actions
+- Only restricted to privileges of the database account. Insert/Update/Delete are available for each table
+
+
+# NIM Docs
+The official NIM documentation can be found at: https://docs.nimsuite.com
