@@ -1,5 +1,6 @@
 $Log_MaskableKeys = @(
-    'password'
+    'password',
+	'connection_string'
 )
 
 
@@ -22,6 +23,12 @@ function Idm-SystemInfo {
     if ($Connection) {
         @(
             @{
+                name = 'connection_header'
+                type = 'text'
+                text = 'Connection'
+				tooltip = 'Connection information for the database'
+            }
+			@{
                 name = 'host_name'
                 type = 'textbox'
                 label = 'Server'
@@ -49,41 +56,7 @@ function Idm-SystemInfo {
                 description = 'Version of Progress OpenEdge Driver'
                 value = '11.7'
             }
-            @{
-                name = 'enableVPN'
-                type = 'checkbox'
-                label = 'Use VPN'
-                value = $true
-            }
-            @{
-                name = 'vpnOpenPath'
-                type = 'textbox'
-                label = 'Open VPN Path'
-                description = 'Path to script start connection to vpn'
-                value = 'C:\\Tools4ever\\Scripts\\connectSkywardVPN.bat'
-            }
-            @{
-                name = 'vpnClosePath'
-                type = 'textbox'
-                label = 'Close VPN Path'
-                description = 'Path to script close connection to vpn'
-                value = 'C:\\Tools4ever\\Scripts\\disconnectSkywardVPN.bat'
-            }
-            @{
-                name = 'user'
-                type = 'textbox'
-                label = 'Username'
-                label_indent = $true
-                description = 'User account name to access server'
-            }
-            @{
-                name = 'password'
-                type = 'textbox'
-                password = $true
-                label = 'Password'
-                label_indent = $true
-                description = 'User account password to access server'
-            }
+            
             @{
                 name = 'isolation_mode'
                 type = 'textbox'
@@ -114,32 +87,92 @@ function Idm-SystemInfo {
                 label = 'Enable KA'
                 value = $true
             }
-			 @{
+			@{
+                name = 'user'
+                type = 'textbox'
+                label = 'Username'
+                description = 'User account name to access server'
+            }
+            @{
+                name = 'password'
+                type = 'textbox'
+                password = $true
+                label = 'Password'
+                description = 'User account password to access server'
+            }
+			@{
+                name = 'query_timeout'
+                type = 'textbox'
+                label = 'Query Timeout'
+                description = 'Time it takes for the query to timeout'
+                value = '1800'
+            }
+			@{
+                name = 'connection_timeout'
+                type = 'textbox'
+                label = 'Connection Timeout'
+                description = 'Time it takes for the ODBC Connection to timeout'
+                value = '3600'
+            }
+			@{
+                name = 'vpn_header'
+                type = 'text'
+                text = 'VPN'
+				tooltip = 'VPN to access network for database (e.g. ISCorp). Not recommended. Use Site-to-Site VPN instead'
+            }
+			@{
+                name = 'enableVPN'
+                type = 'checkbox'
+                label = 'Use VPN'
+                value = $false
+            }
+            @{
+                name = 'vpnOpenPath'
+                type = 'textbox'
+                label = 'Open VPN Path'
+                description = 'Path to script start connection to vpn'
+                value = 'C:\\Tools4ever\\Scripts\\connectSkywardVPN.bat'
+				disabled = '!enableVPN'
+                hidden = '!enableVPN'
+            }
+            @{
+                name = 'vpnClosePath'
+                type = 'textbox'
+                label = 'Close VPN Path'
+                description = 'Path to script close connection to vpn'
+                value = 'C:\\Tools4ever\\Scripts\\disconnectSkywardVPN.bat'
+				disabled = '!enableVPN'
+                hidden = '!enableVPN'
+            }
+			@{
+                name = 'session_header'
+                type = 'text'
+                text = 'Session Options'
+				tooltip = 'Options for system session'
+            }
+			@{
                 name = 'nr_of_sessions'
                 type = 'textbox'
                 label = 'Max. number of simultaneous sessions'
-                description = ''
-                value = 5
+                tooltip = ''
+                value = 1
             }
             @{
                 name = 'sessions_idle_timeout'
                 type = 'textbox'
                 label = 'Session cleanup idle time (minutes)'
-                description = ''
-                value = 30
+                tooltip = ''
+                value = 1
             }
         )
     }
 
     if ($TestConnection) {
         Open-ProgressDBConnection $ConnectionParams
-
-        $tables = Invoke-ProgressDBCommand "
-                SELECT TBL 'Name', 'Table' `"Type`"  
-                FROM sysprogress.SYSTABLES_FULL 
-                WHERE TBLTYPE = 'T'
-                ORDER BY TBL
-            "
+        
+        $query = "SELECT TBL 'Name', 'Table' `"Type`"  FROM sysprogress.SYSTABLES_FULL WHERE TBLTYPE = 'T' ORDER BY TBL"
+        $result = (Invoke-ProgressDBCommand $query $ConnectionParams)
+		Close-ProgressDBConnection
     }
 
     if ($Configuration) {
@@ -165,7 +198,8 @@ $SqlInfoCache = @{}
 function Fill-SqlInfoCache {
     param (
         [switch] $Force,
-		[string] $Table
+		[string] $Table,
+		[string] $ConnectionParams
     )
 	
 	if($Table.length -gt 0) {
@@ -221,7 +255,7 @@ function Fill-SqlInfoCache {
     $object = @{}
 
     # Process in one pass
-    Invoke-ProgressDBCommand $sql_command | ForEach-Object {
+    Invoke-ProgressDBCommand $sql_command $ConnectionParams | ForEach-Object {
         if ($_.full_object_name -ne $object.full_name) {
             if ($object.full_name -ne $null) {
                 $objects.Add($object) | Out-Null
@@ -272,8 +306,8 @@ function Idm-Dispatcher {
             # Get all tables and views in database
             #
 			Open-ProgressDBConnection $SystemParams
-            Fill-SqlInfoCache
-
+            Fill-SqlInfoCache -ConnectionParams $SystemParams
+			
             #
             # Output list of supported operations per table/view (named Class)
             #
@@ -334,7 +368,7 @@ function Idm-Dispatcher {
             # Get meta data
             #
             Open-ProgressDBConnection $SystemParams
-            Fill-SqlInfoCache -Table $Class
+            Fill-SqlInfoCache -Table $Class -ConnectionParams $SystemParams
 
             $columns = ($Global:SqlInfoCache.Objects | Where-Object { $_.full_name -eq $Class }).columns
 
@@ -459,7 +493,7 @@ function Idm-Dispatcher {
             Open-ProgressDBConnection $SystemParams
 
             if (! $Global:ColumnsInfoCache[$Class]) {
-                Fill-SqlInfoCache -Table $Class
+                Fill-SqlInfoCache -Table $Class -ConnectionParams $SystemParams
 
                 $columns = ($Global:SqlInfoCache.Objects | Where-Object { $_.full_name -eq $Class }).columns
 				
@@ -518,12 +552,12 @@ function Idm-Dispatcher {
 				
                 if ($Operation -eq 'Read') {
                     # Streamed output
-                    Invoke-ProgressDBCommand $command
+                    Invoke-ProgressDBCommand $command $ConnectionParams
                 }
                 else {
                     # Log output
                     foreach($cmd in ($command -split ';')) {
-						$rv = Invoke-ProgressDBCommand ($cmd -replace ';','')
+						$rv = Invoke-ProgressDBCommand ($cmd -replace ';','') $ConnectionParams
 						LogIO info ($cmd -split ' ')[0] -Out $rv
 
 						if($cmd.StartsWith('UPDATE') -or $cmd.StartsWith('CREATE')) {
@@ -538,7 +572,7 @@ function Idm-Dispatcher {
         }
 
     }
-
+	Close-ProgressDBConnection
     Log info "Done"
 }
 
@@ -549,15 +583,17 @@ function Idm-Dispatcher {
 
 function Invoke-ProgressDBCommand {
     param (
-        [string] $Command
+        [string] $Command,
+		[string] $ConnectionParams
     )
 
     function Invoke-ProgressDBCommand-ExecuteReader {
         param (
-            [string] $Command
+            [string] $Command,
+			[string] $Timeout
         )
 		$sql_command  = New-Object System.Data.Odbc.OdbcCommand($Command, $Global:ProgressDBConnection)
-		$sql_command.CommandTimeout = 1800
+		$sql_command.CommandTimeout = $Timeout
         $data_adapter = New-Object System.Data.Odbc.OdbcDataAdapter($sql_command)
         $data_table   = New-Object System.Data.DataTable
         $data_adapter.Fill($data_table) | Out-Null
@@ -569,10 +605,13 @@ function Invoke-ProgressDBCommand {
         $data_adapter.Dispose()
         $sql_command.Dispose()
     }
-    $Command = ($Command -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }) -join ' '
+    
+	$connection_params = ConvertFrom-Json2 $ConnectionParams
+	
+	$Command = ($Command -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }) -join ' '
 
     try {
-        Invoke-ProgressDBCommand-ExecuteReader $Command
+        Invoke-ProgressDBCommand-ExecuteReader $Command $connection_params.query_timeout
     }
     catch {
         Log error "Failed: $_"
@@ -627,8 +666,8 @@ function Open-ProgressDBConnection {
         $Global:ColumnsInfoCache = @{}
     }
     catch {
-        Log warn "Failed: $_"
-        #Write-Error $_
+        Log error "Failed: $_"
+        Write-Error $_
     }
 
     Log info "Done"
