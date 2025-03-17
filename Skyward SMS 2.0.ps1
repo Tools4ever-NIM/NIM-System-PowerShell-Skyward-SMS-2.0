@@ -88,6 +88,12 @@ function Idm-SystemInfo {
                 value = $true
             }
 			@{
+                name = 'enablePacketSize'
+                type = 'checkbox'
+                label = 'Enable Packet Size'
+                value = $false
+            }
+			@{
                 name = 'user'
                 type = 'textbox'
                 label = 'Username'
@@ -627,12 +633,12 @@ function Open-ProgressDBConnection {
 
     $connection_params = ConvertFrom-Json2 $ConnectionParams
 
-    $connection_string =  "DRIVER={Progress OpenEdge $($connection_params.driver_version) driver};HOST=$($connection_params.host_name);PORT=$($connection_params.port);DB=$($connection_params.database);UID=$($connection_params.user);PWD=$($connection_params.password);DIL=$($connection_params.isolation_mode);AS=$($connection_params.array_size)"
+    $connection_string =  "DRIVER={Progress OpenEdge $($connection_params.driver_version) driver};HOST=$($connection_params.host_name);PORT=$($connection_params.port);DB=$($connection_params.database);UID=$($connection_params.user);PWD=$($connection_params.password);DIL=$($connection_params.isolation_mode);AS=$($connection_params.array_size);"
     
+	if($connection_params.enablePacketSize) { $connectionString += "Packet Size=512;" }
     if($connection_params.enableETWT) { $connectionString += "ETWT=1;" }
     if($connection_params.enableUWCT) { $connectionString += "UWCT=1;" }
     if($connection_params.enableKA) { $connectionString += "KA=1;" }
-    LOG info $connection_string
 	
     $Global:enableVPN = $connection_params.enableVPN
     $Global:vpnOpenPath = $connection_params.vpnOpenPath
