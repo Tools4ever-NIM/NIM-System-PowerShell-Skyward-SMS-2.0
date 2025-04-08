@@ -3,6 +3,20 @@ $Log_MaskableKeys = @(
 	'connection_string'
 )
 
+# Check if ODBC Driver installed
+$driverPrefix = "Progress OpenEdge"
+$drivers64 = Get-ItemProperty -Path "HKLM:\SOFTWARE\ODBC\ODBCINST.INI\ODBC Drivers" -ErrorAction SilentlyContinue
+$matchingDrivers = $drivers64.PSObject.Properties | Where-Object { $_.Name -like "$driverPrefix*" }
+
+$Global:ModuleStatus = "<b><div class=`"alert alert-danger`" role=`"alert`">$($driverPrefix) ODBC Driver not installed.</div></b>"
+
+if ($matchingDrivers.Count -gt 0) {
+    "Found matching ODBC driver(s):"
+    $matchingDrivers | ForEach-Object { " - $($_.Name)" }
+	$Global:ModuleStatus = "<b><div class=`"alert alert-success`" role=`"alert`">$($matchingDrivers[0].Name) is installed.</div></b>"
+} else {
+    "No ODBC drivers found starting with '$driverPrefix'."
+}
 
 #
 # System functions
@@ -22,6 +36,12 @@ function Idm-SystemInfo {
     
     if ($Connection) {
         @(
+            @{
+                name = 'ModuleStatus'
+                type = 'text'
+                label = 'ODBC Status'
+                text = $Global:ModuleStatus
+            }
             @{
                 name = 'connection_header'
                 type = 'text'
