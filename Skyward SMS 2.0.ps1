@@ -32,7 +32,7 @@ function Idm-SystemInfo {
         [string] $ConnectionParams
     )
 
-    Log info "-Connection=$Connection -TestConnection=$TestConnection -Configuration=$Configuration -ConnectionParams='$ConnectionParams'"
+    Log verbose "-Connection=$Connection -TestConnection=$TestConnection -Configuration=$Configuration -ConnectionParams='$ConnectionParams'"
     
     if ($Connection) {
         @(
@@ -205,7 +205,7 @@ function Idm-SystemInfo {
         @()
     }
 
-    Log info "Done"
+    Log verbose "Done"
 }
 
 
@@ -323,7 +323,7 @@ function Idm-Dispatcher {
         [string] $FunctionParams
     )
 
-    Log info "-Class='$Class' -Operation='$Operation' -GetMeta=$GetMeta -SystemParams='$SystemParams' -FunctionParams='$FunctionParams'"
+    Log verbose "-Class='$Class' -Operation='$Operation' -GetMeta=$GetMeta -SystemParams='$SystemParams' -FunctionParams='$FunctionParams'"
 
     if ($Class -eq '') {
 
@@ -599,7 +599,7 @@ function Idm-Dispatcher {
 
     }
 	Close-ProgressDBConnection
-    Log info "Done"
+    Log verbose "Done"
 }
 
 
@@ -665,7 +665,7 @@ function Open-ProgressDBConnection {
     $Global:vpnClosePath = $connection_params.vpnClosePath
 
     if ($Global:ProgressDBConnection -and $connection_string -ne $Global:ProgressDBConnectionString) {
-        Log info "ProgressDBConnection connection parameters changed"
+        Log verbose "ProgressDBConnection connection parameters changed"
         Close-ProgressDBConnection
     }
 
@@ -674,7 +674,7 @@ function Open-ProgressDBConnection {
         Close-ProgressDBConnection
     }
 
-    Log info "Opening ProgressDBConnection '$connection_string'"
+    Log verbose "Opening ProgressDBConnection '$connection_string'"
 
     try {
         #Force close any connections before connecting
@@ -696,14 +696,14 @@ function Open-ProgressDBConnection {
         Write-Error $_
     }
 
-    Log info "Done"
+    Log verbose "Done"
     
 }
 
 
 function Close-ProgressDBConnection {
     if ($Global:ProgressDBConnection) {
-        Log info "Closing ProgressDBConnection"
+        Log verbose "Closing ProgressDBConnection"
 
         try {
             
@@ -717,23 +717,23 @@ function Close-ProgressDBConnection {
 
         
 
-        Log info "Done"
+        Log verbose "Done"
     }
 }
 
 function Open-ProgressDBVPN {
     if ($Global:enableVPN -eq $true)
     {
-        Log info "Opening vpn..."        
+        Log verbose "Opening vpn..."        
 
         $vpnOutput = Get-ProcessOutput -FileName $Global:vpnOpenPath
-        Log info $vpnOutput.StandardOutput
+        Log verbose $vpnOutput.StandardOutput
 
         if($vpnOutput.StandardError -ne $null)
         {
             Log error $vpnOutput.StandardError
         }
-        Log info "Connected to vpn."
+        Log verbose "Connected to vpn."
     }
 }
 
@@ -741,17 +741,17 @@ function Open-ProgressDBVPN {
 function Close-ProgressDBVPN {
     if ($Global:enableVPN -eq $true)
     {
-        Log info "Closing vpn..."
+        Log verbose "Closing vpn..."
 
         $vpnOutput = Get-ProcessOutput -FileName $Global:vpnClosePath
-        Log info $vpnOutput.StandardOutput
+        Log verbose $vpnOutput.StandardOutput
 
         if($vpnOutput.StandardError -ne $null)
         {
             Log error $vpnOutput.StandardError
         }
 
-        Log info "Closed vpn."
+        Log verbose "Closed vpn."
     }
 }
 
