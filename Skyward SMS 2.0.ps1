@@ -277,14 +277,14 @@ function Fill-SqlInfoCache {
 		"
 	}
 
-    $objects = New-Object System.Collections.ArrayList
+    $objects = @{}
     $object = @{}
 
     # Process in one pass
     Invoke-ProgressDBCommand $sql_command $ConnectionParams | ForEach-Object {
         if ($_.full_object_name -ne $object.full_name) {
             if ($object.full_name -ne $null) {
-                $objects.Add($object) | Out-Null
+                $objects[$object.full_name] = $object
             }
 
             $object = @{
@@ -304,7 +304,7 @@ function Fill-SqlInfoCache {
     }
 
     if ($object.full_name -ne $null) {
-        $objects.Add($object) | Out-Null
+        $objects[$object.full_name] = $object
     }
 
     $Global:SqlInfoCache.Objects = $objects
@@ -339,7 +339,7 @@ function Idm-Dispatcher {
             #
 
              @(
-                foreach ($object in $Global:SqlInfoCache.Objects) {
+                foreach ($object in $Global:SqlInfoCache.Objects.Values) {
                     $primary_keys = $object.columns | Where-Object { $_.is_primary_key } | ForEach-Object { $_.name }
 
                     if ($object.type -ne 'Table') {
@@ -396,7 +396,7 @@ function Idm-Dispatcher {
             Open-ProgressDBConnection $SystemParams
             Fill-SqlInfoCache -Table $Class -ConnectionParams $SystemParams
 
-            $columns = ($Global:SqlInfoCache.Objects | Where-Object { $_.full_name -eq $Class }).columns
+            $columns = $Global:SqlInfoCache.Objects[$Class].columns
 
             switch ($Operation) {
                 'Create' {
@@ -521,7 +521,7 @@ function Idm-Dispatcher {
             if (! $Global:ColumnsInfoCache[$Class]) {
                 Fill-SqlInfoCache -Table $Class -ConnectionParams $SystemParams
 
-                $columns = ($Global:SqlInfoCache.Objects | Where-Object { $_.full_name -eq $Class }).columns
+                $columns = $Global:SqlInfoCache.Objects[$Class].columns
 				
                 $Global:ColumnsInfoCache[$Class] = @{
                     primary_keys = @($columns | Where-Object { $_.is_primary_key } | ForEach-Object { $_.name })
@@ -578,12 +578,12 @@ function Idm-Dispatcher {
 				
                 if ($Operation -eq 'Read') {
                     # Streamed output
-                    Invoke-ProgressDBCommand $command $ConnectionParams
+                    Invoke-ProgressDBCommand $command $SystemParams
                 }
                 else {
                     # Log output
                     foreach($cmd in ($command -split ';')) {
-						$rv = Invoke-ProgressDBCommand ($cmd -replace ';','') $ConnectionParams
+						$rv = Invoke-ProgressDBCommand ($cmd -replace ';','') $SystemParams
 						LogIO info ($cmd -split ' ')[0] -Out $rv
 
 						if($cmd.StartsWith('UPDATE') -or $cmd.StartsWith('CREATE')) {
@@ -598,7 +598,6 @@ function Idm-Dispatcher {
         }
 
     }
-	Close-ProgressDBConnection
     Log verbose "Done"
 }
 
@@ -615,29 +614,28 @@ function Invoke-ProgressDBCommand {
 
     function Invoke-ProgressDBCommand-ExecuteReader {
         param (
-            [string] $Command,
-			[string] $Timeout
+            [string] $Command
         )
-		$sql_command  = New-Object System.Data.Odbc.OdbcCommand($Command, $Global:ProgressDBConnection)
-		$sql_command.CommandTimeout = $Timeout
-        $data_adapter = New-Object System.Data.Odbc.OdbcDataAdapter($sql_command)
-        $data_table   = New-Object System.Data.DataTable
-        $data_adapter.Fill($data_table) | Out-Null
+        $sql_command = New-Object System.Data.Odbc.OdbcCommand($Command, $Global:ProgressDBConnection)
+        $sql_command.CommandTimeout = $Global:ProgressDBQueryTimeout
+        $reader = $sql_command.ExecuteReader()
 
-        # Output data
-        $data_table.Rows | Select $data_table.Columns.ColumnName
+        $col_names = @(0..($reader.FieldCount - 1) | ForEach-Object { $reader.GetName($_) })
 
-        $data_table.Dispose()
-        $data_adapter.Dispose()
+        while ($reader.Read()) {
+            $row = [ordered]@{}
+            foreach ($col in $col_names) {
+                $row[$col] = if ($reader[$col] -is [System.DBNull]) { $null } else { $reader[$col] }
+            }
+            [PSCustomObject]$row
+        }
+
+        $reader.Close()
         $sql_command.Dispose()
     }
-    
-	$connection_params = ConvertFrom-Json2 $ConnectionParams
-	
-	$Command = ($Command -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }) -join ' '
 
     try {
-        Invoke-ProgressDBCommand-ExecuteReader $Command $connection_params.query_timeout
+        Invoke-ProgressDBCommand-ExecuteReader $Command
     }
     catch {
         Log error "Failed: $_"
@@ -655,11 +653,13 @@ function Open-ProgressDBConnection {
 
     $connection_string =  "DRIVER={Progress OpenEdge $($connection_params.driver_version) driver};HOST=$($connection_params.host_name);PORT=$($connection_params.port);DB=$($connection_params.database);UID=$($connection_params.user);PWD=$($connection_params.password);DIL=$($connection_params.isolation_mode);AS=$($connection_params.array_size);"
     
-	if($connection_params.enablePacketSize) { $connectionString += "Packet Size=512;" }
-    if($connection_params.enableETWT) { $connectionString += "ETWT=1;" }
-    if($connection_params.enableUWCT) { $connectionString += "UWCT=1;" }
-    if($connection_params.enableKA) { $connectionString += "KA=1;" }
-	
+	if($connection_params.enablePacketSize) { $connection_string += "Packet Size=512;" }
+    if($connection_params.enableETWT) { $connection_string += "ETWT=1;" }
+    if($connection_params.enableUWCT) { $connection_string += "UWCT=1;" }
+    if($connection_params.enableKA) { $connection_string += "KA=1;" }
+
+    $Global:ProgressDBQueryTimeout = $connection_params.query_timeout
+
     $Global:enableVPN = $connection_params.enableVPN
     $Global:vpnOpenPath = $connection_params.vpnOpenPath
     $Global:vpnClosePath = $connection_params.vpnClosePath
@@ -674,16 +674,20 @@ function Open-ProgressDBConnection {
         Close-ProgressDBConnection
     }
 
+    if ($Global:ProgressDBConnection -and $Global:ProgressDBConnection.State -eq 'Open') {
+        Log verbose "Reusing existing ProgressDBConnection"
+        return
+    }
+
     Log verbose "Opening ProgressDBConnection '$connection_string'"
 
     try {
-        #Force close any connections before connecting
-        Close-ProgressDBVPN 
+        Close-ProgressDBVPN
         Open-ProgressDBVPN
-        
+
         $connection = (new-object System.Data.Odbc.OdbcConnection);
         $connection.connectionstring = $connection_string
-		$connection.ConnectionTimeout = 3600
+		$connection.ConnectionTimeout = $connection_params.connection_timeout
         $connection.open();
 
         $Global:ProgressDBConnection       = $connection
