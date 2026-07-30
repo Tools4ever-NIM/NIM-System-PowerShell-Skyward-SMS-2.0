@@ -3,6 +3,8 @@ $Log_MaskableKeys = @(
 	'connection_string'
 )
 
+$Global:MetaCache = [System.Collections.ArrayList]@();
+
 # Check if ODBC Driver installed
 $driverPrefix = "Progress OpenEdge"
 $drivers64 = Get-ItemProperty -Path "HKLM:\SOFTWARE\ODBC\ODBCINST.INI\ODBC Drivers" -ErrorAction SilentlyContinue
@@ -393,125 +395,176 @@ function Idm-Dispatcher {
             #
             # Get meta data
             #
-            Open-ProgressDBConnection $SystemParams
-            Fill-SqlInfoCache -Table $Class -ConnectionParams $SystemParams
-
-            $columns = $Global:SqlInfoCache.Objects[$Class].columns
-
-            switch ($Operation) {
-                'Create' {
-                    @{
-                        semantics = 'create'
-                        parameters = @(
-                            $columns | ForEach-Object {
-                                @{
-                                    name = $_.name;
-                                    allowance = if ($_.is_identity -or $_.is_computed) { 'prohibited' } elseif (! $_.is_nullable) { 'mandatory' } else { 'optional' }
-                                }
-                            }
-                        )
-                    }
-                    break
-                }
-
-                'Read' {
-                    @(
-                        @{
-                            name = 'select_distinct'
-                            type = 'checkbox'
-                            label = 'Distinct Rows'
-                            description = 'Apply Distinct to select'
-                            value = $false
-                        }
-                        @{
-                            name = 'where_clause'
-                            type = 'textbox'
-                            label = 'Filter (SQL where-clause)'
-                            description = 'Applied SQL where-clause'
-                            value = ''
-                        }
-                        @{
-                            name = 'selected_columns'
-                            type = 'grid'
-                            label = 'Include columns'
-                            description = 'Selected columns'
-                            table = @{
-                                rows = @($columns | ForEach-Object {
-                                    @{
-                                        name = $_.name
-                                        config = @(
-                                            if ($_.is_primary_key) { 'Primary key' }
-                                            if ($_.is_identity)    { 'Generated' }
-                                            if ($_.is_computed)    { 'Computed' }
-                                            if ($_.is_nullable)    { 'Nullable' }
-                                        ) -join ' | '
-                                    }
-                                })
-                                settings_grid = @{
-                                    selection = 'multiple'
-                                    key_column = 'name'
-                                    checkbox = $true
-                                    filter = $true
-                                    columns = @(
-                                        @{
-                                            name = 'name'
-                                            display_name = 'Name'
-                                        }
-                                        @{
-                                            name = 'config'
-                                            display_name = 'Configuration'
-                                        }
-                                    )
-                                }
-                            }
-                            value = @($columns | ForEach-Object { $_.name })
-                        }
-                    )
-                    break
-                }
-
-                'Update' {
-                    @{
-                        semantics = 'update'
-                        parameters = @(
-                            $columns | ForEach-Object {
-                                @{
-                                    name = $_.name;
-                                    allowance = if ($_.is_primary_key) { 'mandatory' } else { 'optional' }
-                                }
-                            }
-                            @{
-                                name = '*'
-                                allowance = 'prohibited'
-                            }
-                        )
-                    }
-                    break
-                }
-
-                'Delete' {
-                    @{
-                        semantics = 'delete'
-                        parameters = @(
-                            $columns | ForEach-Object {
-                                if ($_.is_primary_key) {
-                                    @{
-                                        name = $_.name
-                                        allowance = 'mandatory'
-                                    }
-                                }
-                            }
-                            @{
-                                name = '*'
-                                allowance = 'prohibited'
-                            }
-                        )
-                    }
-                    break
-                }
+            
+            if($Global:SqlInfoCache.Objects.count -lt 1) {
+                Open-ProgressDBConnection $SystemParams
+                Fill-SqlInfoCache -ConnectionParams $SystemParams
             }
 
+            if (-not $Global:SqlMetaCache) {
+                $Global:SqlMetaCache = @{}
+            }
+
+            $cacheKey = '{0}|{1}' -f $Class, $Operation
+            if ($Global:SqlMetaCache.ContainsKey($cacheKey)) {
+                $Global:SqlMetaCache[$cacheKey]
+            }
+            else {
+                $columns = $Global:SqlInfoCache.Objects[$Class].columns
+
+                switch ($Operation) {
+                    'Create' {
+                        $parameters = [System.Collections.Generic.List[object]]::new()
+                        foreach ($column in $columns) {
+                            $parameters.Add(@{
+                                name = $column.name
+                                allowance = if ($column.is_identity -or $column.is_computed) { 'prohibited' } elseif (! $column.is_nullable) { 'mandatory' } else { 'optional' }
+                            })
+                        }
+
+                        $meta = @{
+                            semantics = 'create'
+                            parameters = $parameters.ToArray()
+                        }
+                        break
+                    }
+
+                    'Read' {
+                        $rows = [System.Collections.Generic.List[object]]::new()
+                        $selectedColumns = [System.Collections.Generic.List[object]]::new()
+
+                        foreach ($column in $columns) {
+                            if ($column.is_primary_key) {
+                                if ($column.is_identity) {
+                                    if ($column.is_computed) {
+                                        if ($column.is_nullable) { $config = 'Primary key | Generated | Computed | Nullable' }
+                                        else { $config = 'Primary key | Generated | Computed' }
+                                    }
+                                    elseif ($column.is_nullable) { $config = 'Primary key | Generated | Nullable' }
+                                    else { $config = 'Primary key | Generated' }
+                                }
+                                elseif ($column.is_computed) {
+                                    if ($column.is_nullable) { $config = 'Primary key | Computed | Nullable' }
+                                    else { $config = 'Primary key | Computed' }
+                                }
+                                elseif ($column.is_nullable) { $config = 'Primary key | Nullable' }
+                                else { $config = 'Primary key' }
+                            }
+                            elseif ($column.is_identity) {
+                                if ($column.is_computed) {
+                                    if ($column.is_nullable) { $config = 'Generated | Computed | Nullable' }
+                                    else { $config = 'Generated | Computed' }
+                                }
+                                elseif ($column.is_nullable) { $config = 'Generated | Nullable' }
+                                else { $config = 'Generated' }
+                            }
+                            elseif ($column.is_computed) {
+                                if ($column.is_nullable) { $config = 'Computed | Nullable' }
+                                else { $config = 'Computed' }
+                            }
+                            elseif ($column.is_nullable) { $config = 'Nullable' }
+                            else { $config = '' }
+
+                            $rows.Add(@{
+                                name = $column.name
+                                config = $config
+                            })
+                            $selectedColumns.Add($column.name)
+                        }
+
+                        $meta = @(
+                            @{
+                                name = 'select_distinct'
+                                type = 'checkbox'
+                                label = 'Distinct Rows'
+                                description = 'Apply Distinct to select'
+                                value = $false
+                            }
+                            @{
+                                name = 'where_clause'
+                                type = 'textbox'
+                                label = 'Filter (SQL where-clause)'
+                                description = 'Applied SQL where-clause'
+                                value = ''
+                            }
+                            @{
+                                name = 'selected_columns'
+                                type = 'grid'
+                                label = 'Include columns'
+                                description = 'Selected columns'
+                                table = @{
+                                    rows = $rows.ToArray()
+                                    settings_grid = @{
+                                        selection = 'multiple'
+                                        key_column = 'name'
+                                        checkbox = $true
+                                        filter = $true
+                                        columns = @(
+                                            @{
+                                                name = 'name'
+                                                display_name = 'Name'
+                                            }
+                                            @{
+                                                name = 'config'
+                                                display_name = 'Configuration'
+                                            }
+                                        )
+                                    }
+                                }
+                                value = $selectedColumns.ToArray()
+                            }
+                        )
+                        break
+                    }
+
+                    'Update' {
+                        $parameters = [System.Collections.Generic.List[object]]::new()
+                        foreach ($column in $columns) {
+                            $parameters.Add(@{
+                                name = $column.name
+                                allowance = if ($column.is_primary_key) { 'mandatory' } else { 'optional' }
+                            })
+                        }
+                        $parameters.Add(@{
+                            name = '*'
+                            allowance = 'prohibited'
+                        })
+
+                        $meta = @{
+                            semantics = 'update'
+                            parameters = $parameters.ToArray()
+                        }
+                        break
+                    }
+
+                    'Delete' {
+                        $parameters = [System.Collections.Generic.List[object]]::new()
+                        foreach ($column in $columns) {
+                            if ($column.is_primary_key) {
+                                $parameters.Add(@{
+                                    name = $column.name
+                                    allowance = 'mandatory'
+                                })
+                            }
+                        }
+                        $parameters.Add(@{
+                            name = '*'
+                            allowance = 'prohibited'
+                        })
+
+                        $meta = @{
+                            semantics = 'delete'
+                            parameters = $parameters.ToArray()
+                        }
+                        break
+                    }
+                }
+
+                $Global:SqlMetaCache[$cacheKey] = $meta
+                $meta
+            }
         }
+
         else {
             #
             # Execute function
