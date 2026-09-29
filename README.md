@@ -1,5 +1,7 @@
 # Skyward SMS 2.0
 
+Read the [Skyward SMS 2.0 integration documentation](https://docs.nimsuite.com/en/integrations/skyward-sms-2-0) for connector details and related guides.
+
 <img src="https://github.com/Tools4ever-NIM/NIM-System-PowerShell-Skyward-SMS-2.0/assets/24281600/4ca19abe-5fd1-464d-b0c8-f7919318b9e7" width="256px" />
 
 
